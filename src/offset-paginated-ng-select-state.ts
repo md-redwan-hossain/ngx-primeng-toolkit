@@ -1,8 +1,4 @@
-import {
-  HttpClient,
-  HttpContext,
-  HttpContextToken,
-} from "@angular/common/http";
+import { HttpClient, HttpContext, HttpContextToken, HttpParams } from "@angular/common/http";
 import {
   assertInInjectionContext,
   computed,
@@ -15,7 +11,7 @@ import {
   Provider,
   runInInjectionContext,
   Signal,
-  signal,
+  signal
 } from "@angular/core";
 import { takeUntilDestroyed, toObservable } from "@angular/core/rxjs-interop";
 import {
@@ -31,13 +27,9 @@ import {
   Subject,
   switchMap,
   takeUntil,
-  tap,
+  tap
 } from "rxjs";
 import { cleanNullishFromObject } from "./utils";
-
-type DataContainer<T> =
-  | { payload: T[]; totalCount: number }
-  | { data: T[]; totalCount: number };
 
 type OffsetPaginatedNgSelectStateResetOptions = {
   resetQueryParams: boolean;
@@ -45,9 +37,13 @@ type OffsetPaginatedNgSelectStateResetOptions = {
   resetCache: boolean;
 };
 
+type QueryParamPrimitive = string | number | boolean;
+type QueryParamValue = QueryParamPrimitive | ReadonlyArray<QueryParamPrimitive>;
+type QueryParams = Record<string, QueryParamValue>;
+
 type CacheKey = {
   url: string;
-  queryParams: Record<string, string | number | boolean>;
+  queryParams: string;
   body: any;
 };
 
@@ -59,7 +55,7 @@ export type OffsetPaginatedNgSelectStateOptions = {
   dataArrayKey?: string;
   totalDataCountKey?: string;
   requestMethod?: "GET" | "POST";
-  queryParams?: Record<string, string | number | boolean>;
+  queryParams?: QueryParams;
   postRequestBody?: any;
   dataLimitPerRequest?: number;
   debounceTimeMs?: number;
@@ -67,6 +63,7 @@ export type OffsetPaginatedNgSelectStateOptions = {
   cacheTtlSec?: number;
   disableCacheExpiration?: boolean;
   injector?: Injector;
+  onCloseReset?: { reset: boolean; resetOpts?: OffsetPaginatedNgSelectStateResetOptions };
   httpContext?: HttpContext;
   onError?: (error: Error) => void;
 };
@@ -93,21 +90,21 @@ const optionsWithDefaultValue: DefaultOptions = {
   searchOnlyMode: false,
   requestMethod: "GET",
   queryParams: {},
+  onCloseReset: { reset: false },
   postRequestBody: null,
   dataLimitPerRequest: 20,
   useCache: false,
   cacheTtlSec: 60,
-  disableCacheExpiration: false,
+  disableCacheExpiration: false
 };
 
-const OFFSET_PAGINATED_NG_SELECT_STATE_CONFIG =
-  new InjectionToken<DefaultOptions>(
-    "OFFSET_PAGINATED_NG_SELECT_STATE_CONFIG",
-    {
-      providedIn: "root",
-      factory: () => optionsWithDefaultValue,
-    }
-  );
+const OFFSET_PAGINATED_NG_SELECT_STATE_CONFIG = new InjectionToken<DefaultOptions>(
+  "OFFSET_PAGINATED_NG_SELECT_STATE_CONFIG",
+  {
+    providedIn: "root",
+    factory: () => optionsWithDefaultValue
+  }
+);
 
 export function provideOffsetPaginatedNgSelectStateConfig(
   configFactory: () => OffsetPaginatedNgSelectStateConfig
@@ -117,36 +114,24 @@ export function provideOffsetPaginatedNgSelectStateConfig(
     useFactory: () => {
       const config = configFactory();
       return { ...optionsWithDefaultValue, ...config };
-    },
+    }
   };
 }
 
-export const OffsetPaginatedNgSelectNetworkRequest = new HttpContextToken(
-  () => false
-);
+export const OffsetPaginatedNgSelectNetworkRequest = new HttpContextToken(() => false);
 
-function isValidData(
-  dataArrayKey: string,
-  dataCountKey: string,
-  rawData: any
-): boolean {
-  if (
-    typeof rawData !== "object" ||
-    rawData === null ||
-    Array.isArray(rawData)
-  ) {
+function isValidData(dataArrayKey: string, dataCountKey: string, rawData: any): boolean {
+  if (typeof rawData !== "object" || rawData === null || Array.isArray(rawData)) {
     return false;
   }
 
   // Check for either the configured dataArrayKey, or fallback to 'payload' or 'data'
-  const hasData =
-    dataArrayKey in rawData || "payload" in rawData || "data" in rawData;
+  const hasData = dataArrayKey in rawData || "payload" in rawData || "data" in rawData;
   if (!hasData || !(dataCountKey in rawData)) {
     return false;
   }
 
-  const dataArray =
-    rawData[dataArrayKey] ?? rawData["payload"] ?? rawData["data"];
+  const dataArray = rawData[dataArrayKey] ?? rawData["payload"] ?? rawData["data"];
   if (!Array.isArray(dataArray)) {
     return false;
   }
@@ -161,14 +146,14 @@ function isValidData(
 function defaultData<T>(): { payload: T[]; totalCount: number } {
   return {
     payload: [] as T[],
-    totalCount: 0,
+    totalCount: 0
   };
 }
 
 const defaultResetOpts = {
   resetQueryParams: false,
   resetBody: false,
-  resetCache: false,
+  resetCache: false
 };
 
 export interface OffsetPaginatedNgSelectStateRef<TData> {
@@ -176,7 +161,7 @@ export interface OffsetPaginatedNgSelectStateRef<TData> {
   typeaheadSubject: Subject<string>;
   data: Signal<TData[]>;
   isLoading: Signal<boolean>;
-  queryParams: Signal<Record<string, string | number | boolean>>;
+  queryParams: Signal<QueryParams>;
   postRequestBody: Signal<any>;
 
   // Event handler methods
@@ -191,13 +176,40 @@ export interface OffsetPaginatedNgSelectStateRef<TData> {
   reset(options?: OffsetPaginatedNgSelectStateResetOptions): void;
   setBody(value: any): this;
   clearBody(): this;
-  patchQueryParams(value: Record<string, string | number | boolean>): this;
+  patchQueryParams(value: QueryParams): this;
   removeQueryParam(key: string): this;
   removeAllQueryParams(): this;
 }
 
+function httpParamsToObject(params: HttpParams): QueryParams {
+  const result: QueryParams = {};
+
+  params.keys().forEach((key) => {
+    const values = params.getAll(key);
+    if (values === null) {
+      return;
+    }
+
+    result[key] = values.length > 1 ? values : values[0];
+  });
+
+  return result;
+}
+
+function removeBlacklistedParams(params: HttpParams, blacklistedQueryKeys: string[]): HttpParams {
+  let current = params;
+
+  params.keys().forEach((key) => {
+    if (blacklistedQueryKeys.includes(key.toLowerCase())) {
+      current = current.delete(key);
+    }
+  });
+
+  return current;
+}
+
 export function offsetPaginatedNgSelectState<TData>(
-  url: string | Signal<string>,
+  url: string | Signal<string | null>,
   options?: OffsetPaginatedNgSelectStateOptions
 ): OffsetPaginatedNgSelectStateRef<TData> {
   if (isDevMode() && !options?.injector) {
@@ -219,20 +231,19 @@ export function offsetPaginatedNgSelectState<TData>(
       ...configFromDi,
       ...cleanNullishFromObject(options),
       httpContext: options?.httpContext ?? new HttpContext(),
-      onError: options?.onError ?? configFromDi.onError,
+      onError: options?.onError ?? configFromDi.onError
     };
 
     const blackListedQueryKeys = [
       mergedOptions.searchQueryParamKey,
       mergedOptions.pageQueryParamKey,
-      mergedOptions.limitQueryParamKey,
+      mergedOptions.limitQueryParamKey
     ].map((elem) => elem.toLowerCase());
 
-    Object.keys(mergedOptions.queryParams).forEach((key) => {
-      if (blackListedQueryKeys.includes(key.toLowerCase())) {
-        delete mergedOptions.queryParams[key];
-      }
-    });
+    const sanitizedMergedQueryParams = removeBlacklistedParams(
+      new HttpParams({ fromObject: mergedOptions.queryParams }),
+      blackListedQueryKeys
+    );
 
     const internalState = Object.seal({
       apiCallNotification: new Subject<void>(),
@@ -247,23 +258,20 @@ export function offsetPaginatedNgSelectState<TData>(
       searchText: signal<string | null>(null),
       cache: new Map<string, { payload: TData[]; totalCount: number }>(),
       postRequestBody: signal(mergedOptions.postRequestBody),
-      queryParamsFromUser: signal<Record<string, string | number | boolean>>(
-        mergedOptions.queryParams
-      ),
+      queryParamsFromConsumer: signal(sanitizedMergedQueryParams)
     });
 
     const finalQueryParams = computed(() => {
-      const val: Record<string, string | number | boolean> = {
-        [mergedOptions.pageQueryParamKey]: internalState.currentPage(),
-        [mergedOptions.limitQueryParamKey]: mergedOptions.dataLimitPerRequest,
-        ...cleanNullishFromObject(internalState.queryParamsFromUser()),
-      };
+      let val = internalState
+        .queryParamsFromConsumer()
+        .set(mergedOptions.pageQueryParamKey, String(internalState.currentPage()))
+        .set(mergedOptions.limitQueryParamKey, String(mergedOptions.dataLimitPerRequest));
 
       const searchText = internalState.searchText();
       if (searchText !== null) {
-        val[mergedOptions.searchQueryParamKey] = searchText;
+        val = val.set(mergedOptions.searchQueryParamKey, searchText);
       } else {
-        delete val[mergedOptions.searchQueryParamKey];
+        val = val.delete(mergedOptions.searchQueryParamKey);
       }
 
       return val;
@@ -294,9 +302,7 @@ export function offsetPaginatedNgSelectState<TData>(
         });
     }
 
-    function reset(
-      options: OffsetPaginatedNgSelectStateResetOptions = defaultResetOpts
-    ) {
+    function reset(options: OffsetPaginatedNgSelectStateResetOptions = defaultResetOpts) {
       internalState.apiCallAbortNotifier.next();
       internalState.currentPage.set(1);
       internalState.isCurrentPageSuccessful.set(false);
@@ -311,7 +317,7 @@ export function offsetPaginatedNgSelectState<TData>(
       }
 
       if (options.resetQueryParams) {
-        internalState.queryParamsFromUser.set(mergedOptions.queryParams);
+        internalState.queryParamsFromConsumer.set(sanitizedMergedQueryParams);
       }
 
       if (options.resetCache) {
@@ -323,17 +329,14 @@ export function offsetPaginatedNgSelectState<TData>(
       internalState.apiCallNotification.next();
     };
 
-    const handleApiResponse = (newData: {
-      payload: TData[];
-      totalCount: number;
-    }) => {
+    const handleApiResponse = (newData: { payload: TData[]; totalCount: number }) => {
       internalState.isCurrentPageSuccessful.set(true);
 
       if (newData.payload.length > 0) {
         internalState.loadedData.update((val) => {
           return {
             payload: [...val.payload, ...newData.payload],
-            totalCount: newData.totalCount,
+            totalCount: newData.totalCount
           };
         });
       }
@@ -345,10 +348,13 @@ export function offsetPaginatedNgSelectState<TData>(
 
     const loadDataFromApi = () => {
       const finalUrl = isSignal(url) ? url() : url;
+      if (finalUrl === null) {
+        return of(null);
+      }
       const key: CacheKey = {
         url: finalUrl,
         body: internalState.postRequestBody(),
-        queryParams: finalQueryParams(),
+        queryParams: finalQueryParams().toString()
       };
 
       if (mergedOptions.requestMethod !== "POST") {
@@ -374,10 +380,7 @@ export function offsetPaginatedNgSelectState<TData>(
             internalState.isLoading.set(true);
             return http.get(finalUrl, {
               params: finalQueryParams(),
-              context: mergedOptions.httpContext.set(
-                OffsetPaginatedNgSelectNetworkRequest,
-                true
-              ),
+              context: mergedOptions.httpContext.set(OffsetPaginatedNgSelectNetworkRequest, true)
             });
           });
           break;
@@ -387,10 +390,7 @@ export function offsetPaginatedNgSelectState<TData>(
             internalState.isLoading.set(true);
             return http.post(finalUrl, internalState.postRequestBody(), {
               params: finalQueryParams(),
-              context: mergedOptions.httpContext.set(
-                OffsetPaginatedNgSelectNetworkRequest,
-                true
-              ),
+              context: mergedOptions.httpContext.set(OffsetPaginatedNgSelectNetworkRequest, true)
             });
           });
           break;
@@ -401,13 +401,7 @@ export function offsetPaginatedNgSelectState<TData>(
 
       return req.pipe(
         switchMap((rawData: any) => {
-          if (
-            !isValidData(
-              mergedOptions.dataArrayKey,
-              mergedOptions.totalDataCountKey,
-              rawData
-            )
-          ) {
+          if (!isValidData(mergedOptions.dataArrayKey, mergedOptions.totalDataCountKey, rawData)) {
             throw new Error(
               `The response body must be an object. Valid example: { ${mergedOptions.dataArrayKey}: [], ${mergedOptions.totalDataCountKey}: 0 } or { payload: [], ${mergedOptions.totalDataCountKey}: 0 } or { data: [], ${mergedOptions.totalDataCountKey}: 0 }`
             );
@@ -415,14 +409,11 @@ export function offsetPaginatedNgSelectState<TData>(
 
           // Extract data array - support configured key, 'payload', or 'data'
           const dataArray =
-            rawData[mergedOptions.dataArrayKey] ??
-            rawData["payload"] ??
-            rawData["data"] ??
-            [];
+            rawData[mergedOptions.dataArrayKey] ?? rawData["payload"] ?? rawData["data"] ?? [];
 
           const dataInContainer: { payload: TData[]; totalCount: number } = {
             payload: dataArray,
-            totalCount: rawData[mergedOptions.totalDataCountKey] ?? 0,
+            totalCount: rawData[mergedOptions.totalDataCountKey] ?? 0
           };
 
           return of(dataInContainer);
@@ -469,9 +460,7 @@ export function offsetPaginatedNgSelectState<TData>(
 
     typeAhead$
       .pipe(
-        combineLatestWith(
-          toObservable(internalState.searchTermFromSearchEvent)
-        ),
+        combineLatestWith(toObservable(internalState.searchTermFromSearchEvent)),
         debounceTime(mergedOptions.debounceTimeMs),
         switchMap(([typeaheadValue, searchEventValue]) => {
           if (typeaheadValue === searchEventValue) {
@@ -500,7 +489,9 @@ export function offsetPaginatedNgSelectState<TData>(
     return Object.seal({
       // data state
       reset,
-      queryParams: finalQueryParams,
+      queryParams: computed(() => {
+        return httpParamsToObject(finalQueryParams());
+      }),
       postRequestBody: internalState.postRequestBody.asReadonly(),
       typeaheadSubject,
       data: computed(() => {
@@ -522,6 +513,9 @@ export function offsetPaginatedNgSelectState<TData>(
 
       onClose() {
         internalState.isSelectPanelOpen.set(false);
+        if (mergedOptions.onCloseReset.reset) {
+          reset(mergedOptions.onCloseReset.resetOpts);
+        }
       },
 
       onClear() {
@@ -567,7 +561,7 @@ export function offsetPaginatedNgSelectState<TData>(
         return this;
       },
 
-      patchQueryParams(value: Record<string, string | number | boolean>) {
+      patchQueryParams(value: QueryParams) {
         const newValue = { ...value };
 
         Object.keys(newValue).forEach((key) => {
@@ -576,33 +570,39 @@ export function offsetPaginatedNgSelectState<TData>(
           }
         });
 
-        if (Object.keys(newValue).length > 0) {
-          reset();
+        const keys = Object.keys(newValue);
 
-          internalState.queryParamsFromUser.update((currentValue) => {
-            return {
-              ...currentValue,
-              ...newValue,
-            };
-          });
+        if (keys.length === 0) {
+          return this;
         }
+
+        reset();
+
+        internalState.queryParamsFromConsumer.update((current) => {
+          let next = current;
+
+          keys.forEach((key) => {
+            next = next.delete(key);
+          });
+
+          return next.appendAll(newValue);
+        });
 
         return this;
       },
 
       removeQueryParam(key: string) {
         reset();
-        internalState.queryParamsFromUser.update((currentValue) => {
-          const { [key]: _, ...rest } = currentValue;
-          return rest;
+        internalState.queryParamsFromConsumer.update((currentValue) => {
+          return currentValue.delete(key);
         });
         return this;
       },
       removeAllQueryParams() {
         reset();
-        internalState.queryParamsFromUser.set({});
+        internalState.queryParamsFromConsumer.set(new HttpParams());
         return this;
-      },
+      }
     });
   });
 }

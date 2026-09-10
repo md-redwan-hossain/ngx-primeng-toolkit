@@ -207,10 +207,19 @@ export class PrimeNgDynamicTableStateHelper<T> {
    * Handles PrimeNG table lazy load events
    * @param event - The lazy load event from PrimeNG table
    */
-  public async onLazyLoad(event: TableLazyLoadEvent): Promise<void> {
+  public async onLazyLoad(event: TableLazyLoadEvent, predicate: boolean = true): Promise<void> {
     if (this.isLoading()) {
       return;
     }
+
+    if (!predicate) {
+      patchState(this.state, {
+        data: [],
+        totalRecords: 0,
+      });
+      return;
+    }
+
     patchState(this.state, {
       size: event.rows || 15,
       page: Math.floor((event.first || 0) / (event.rows || 15)) + 1,

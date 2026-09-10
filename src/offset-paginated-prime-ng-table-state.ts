@@ -105,6 +105,7 @@ export interface OffsetPaginatedPrimeNgTableStateRef<T> {
   isLoading: Signal<boolean>;
   queryParams: Signal<Record<string, string | number | boolean>>;
   onLazyLoad(event: TableLazyLoadEvent): void;
+  refresh(): this;
   patchQueryParams(value: Record<string, string | number | boolean>): this;
   removeQueryParam(key: string): this;
   removeAllQueryParams(): this;
@@ -302,9 +303,7 @@ export function offsetPaginatedPrimeNgTableState<T>(
     internalState.apiCallNotification
       .pipe(
         switchMap(() => {
-          if (internalState.isLoading()) {
-            return of(null);
-          } else if (!internalState.predicate()) {
+          if (!internalState.predicate()) {
             return of(defaultData<T>());
           } else {
             return loadDataFromApi();
@@ -343,6 +342,12 @@ export function offsetPaginatedPrimeNgTableState<T>(
         }
 
         internalState.apiCallNotification.next();
+      },
+
+      refresh() {
+        internalState.apiCallAbortNotifier.next();
+        internalState.apiCallNotification.next();
+        return this;
       },
 
       patchQueryParams(value: Record<string, string | number | boolean>) {
@@ -489,20 +494,3 @@ function extractMeta(dto: LazyLoadMeta): DynamicQueryRequest {
 
   return { filters, sorts };
 }
-
-const DynamicUrlBuilder: FilterAndSortFn = (meta: LazyLoadMeta): HttpParams => {
-  const dto = extractMeta(meta);
-  const usp = new HttpParams();
-
-  dto.filters.forEach((item) => {
-    const paramKey = `${item.field}__${item.type}`;
-    usp.append(paramKey, item.value);
-  });
-
-  dto.sorts.forEach((item) => {
-    const paramKey = `$sort__${item.serial}__${item.isDesc ? "desc" : "asc"}`;
-    usp.append(paramKey, item.field);
-  });
-
-  return usp;
-};

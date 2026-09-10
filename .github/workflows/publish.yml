@@ -1,14 +1,21 @@
+# Publishes via npm Trusted Publishing (OIDC) — no NPM_TOKEN required.
+# Publish runs only on manual workflow_dispatch from main (no push/PR CD).
+#
+# One-time setup (any package maintainer on npmjs.com):
+#   Package → Settings → Trusted Publisher → GitHub Actions
+#   - Organization or user: saiful-70   (GitHub repo owner)
+#   - Repository: ngx-primeng-toolkit
+#   - Workflow filename: publish.yml
+#   - Allowed actions: enable "npm publish"
+# After OIDC works, remove the GitHub NPM_TOKEN secret and revoke old automation tokens.
+
 name: Publish to NPM
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   test:
@@ -33,7 +40,10 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,7 +53,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
@@ -52,91 +62,62 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Auto-bump version
-        id: auto-version
+      - name: Resolve version and publish readiness
+        id: version
         run: |
-          # Get the last commit message
           COMMIT_MSG=$(git log -1 --pretty=%B)
           echo "Commit message: $COMMIT_MSG"
 
-          # Skip if last commit was already a version bump (prevents double-bumping on re-runs)
           if [[ $COMMIT_MSG == *"[skip ci]"* ]] || [[ $COMMIT_MSG == *"chore: bump version"* ]]; then
-            echo "Last commit was a version bump, skipping"
+            echo "Skipping publish for bump/skip-ci commit"
+            echo "should-publish=false" >> $GITHUB_OUTPUT
             echo "version-bumped=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Determine version bump type based on commit message
-          if [[ $COMMIT_MSG == *"BREAKING CHANGE"* ]] || [[ $COMMIT_MSG == *"major:"* ]]; then
-            echo "Bumping major version"
-            npm version major --no-git-tag-version
-          elif [[ $COMMIT_MSG == *"feat:"* ]] || [[ $COMMIT_MSG == *"feature:"* ]]; then
-            echo "Bumping minor version"
-            npm version minor --no-git-tag-version
-          elif [[ $COMMIT_MSG == *"fix:"* ]] || [[ $COMMIT_MSG == *"patch:"* ]] || [[ $COMMIT_MSG == *"bug:"* ]]; then
-            echo "Bumping patch version"
-            npm version patch --no-git-tag-version
-          else
-            echo "No version bump needed for this commit"
-            echo "version-bumped=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Configure git
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-
-          # Ensure we're up to date with remote
-          git fetch origin main
-
-          # Check for any uncommitted changes and stash them temporarily
-          if ! git diff --quiet || ! git diff --cached --quiet; then
-            echo "Found uncommitted changes, stashing them"
-            git stash
-          fi
-
-          # Make sure we're on latest main
-          git reset --hard origin/main
-
-          # Re-run the version bump on clean state
-          if [[ $COMMIT_MSG == *"BREAKING CHANGE"* ]] || [[ $COMMIT_MSG == *"major:"* ]]; then
-            npm version major --no-git-tag-version
-          elif [[ $COMMIT_MSG == *"feat:"* ]] || [[ $COMMIT_MSG == *"feature:"* ]]; then
-            npm version minor --no-git-tag-version
-          elif [[ $COMMIT_MSG == *"fix:"* ]] || [[ $COMMIT_MSG == *"patch:"* ]] || [[ $COMMIT_MSG == *"bug:"* ]]; then
-            npm version patch --no-git-tag-version
-          fi
-
-          # Commit and push the version change
-          git add package.json
-          git commit -m "chore: bump version [skip ci]"
-          git push origin main
-
-          echo "version-bumped=true" >> $GITHUB_OUTPUT
-
-      - name: Check if version changed
-        id: check-version
-        run: |
           CURRENT_VERSION=$(node -p "require('./package.json').version")
-          PUBLISHED_VERSION=$(npm view ngx-primeng-toolkit version 2>/dev/null || echo "0.0.0")
-          echo "current-version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "published-version=$PUBLISHED_VERSION" >> $GITHUB_OUTPUT
-          if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
-            echo "version-changed=true" >> $GITHUB_OUTPUT
+          echo "Checked-out version: $CURRENT_VERSION"
+
+          if npm view "ngx-primeng-toolkit@$CURRENT_VERSION" version >/dev/null 2>&1; then
+            echo "Version $CURRENT_VERSION is already on npm — bumping"
+
+            if [[ $COMMIT_MSG == *"BREAKING CHANGE"* ]] || [[ $COMMIT_MSG == *"major:"* ]]; then
+              echo "Bumping major version"
+              npm version major --no-git-tag-version
+            elif [[ $COMMIT_MSG == *"feat:"* ]] || [[ $COMMIT_MSG == *"feature:"* ]]; then
+              echo "Bumping minor version"
+              npm version minor --no-git-tag-version
+            else
+              # fix:/patch:/bug: and any other commit — must bump because version exists
+              echo "Bumping patch version"
+              npm version patch --no-git-tag-version
+            fi
+
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git add package.json
+            git commit -m "chore: bump version [skip ci]"
+            git push origin main
+
+            CURRENT_VERSION=$(node -p "require('./package.json').version")
+            echo "version-bumped=true" >> $GITHUB_OUTPUT
           else
-            echo "version-changed=false" >> $GITHUB_OUTPUT
+            echo "Version $CURRENT_VERSION is not on npm — publishing as-is"
+            echo "version-bumped=false" >> $GITHUB_OUTPUT
           fi
+
+          echo "current-version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "should-publish=true" >> $GITHUB_OUTPUT
 
       - name: Publish to NPM
-        if: steps.auto-version.outputs.version-bumped == 'true' && steps.check-version.outputs.version-changed == 'true'
+        if: steps.version.outputs.should-publish == 'true'
         run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create Git Tag
-        if: steps.auto-version.outputs.version-bumped == 'true' && steps.check-version.outputs.version-changed == 'true'
+        if: steps.version.outputs.should-publish == 'true'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git tag v${{ steps.check-version.outputs.current-version }}
-          git push origin v${{ steps.check-version.outputs.current-version }}
+          VERSION="${{ steps.version.outputs.current-version }}"
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"

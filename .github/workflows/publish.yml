@@ -3,7 +3,7 @@
 #
 # One-time setup (any package maintainer on npmjs.com):
 #   Package → Settings → Trusted Publisher → GitHub Actions
-#   - Organization or user: saiful-70   (GitHub repo owner)
+#   - Organization or user: md-redwan-hossain   (GitHub repo owner)
 #   - Repository: ngx-primeng-toolkit
 #   - Workflow filename: publish.yml
 #   - Allowed actions: enable "npm publish"

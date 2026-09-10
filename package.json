@@ -54,11 +54,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/saiful-70/ngx-primeng-toolkit.git"
+    "url": "git+https://github.com/md-redwan-hossain/ngx-primeng-toolkit.git"
   },
-  "homepage": "https://github.com/saiful-70/ngx-primeng-toolkit#readme",
+  "homepage": "https://github.com/md-redwan-hossain/ngx-primeng-toolkit#readme",
   "bugs": {
-    "url": "https://github.com/saiful-70/ngx-primeng-toolkit/issues"
+    "url": "https://github.com/md-redwan-hossain/ngx-primeng-toolkit/issues"
   },
   "devDependencies": {
     "@angular/common": "^21.2.23",
